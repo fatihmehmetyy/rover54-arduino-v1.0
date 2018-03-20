@@ -1,0 +1,466 @@
+#include <Servo.h>          //Servo motor kütüphanesi
+#include <NewPing.h>        //Ultrasonic sensör kütüphanesi/kendi fonksiyonunuz ile
+                            // kütüphanesizde kullanbilmeniz mümkün
+#include <Wire.h>           //I2c kütüphanesi
+#include <HMC5883L.h>       //elektronik pusula ktüphanesi
+#include "TinyGPS.h"        //gps kütüphanesi tinygps++ da kullanılabilir
+                            // ancak bazı düzenlemeler yapılmalıdır.
+#include <SD.h>             //SD CARD kütüphanesi yazma ve okuma işlemleri için şart
+#include <SPI.h>            //SD CARD a yazma ve okuma işlemleri için spi haberleşme kullanıldığı için eklendi.
+
+
+File myFile;//sd card
+int pinCS = 53;//sd card
+
+float altDeger,ustDeger;    //hesaplanan açının alt ve üst değer   
+float derece;               //pusula derecesi
+long lat,lon;               //
+long baslangicMillis;       //millis fonksiyonun ilk çalışma anının atandığı değişken
+
+float testderece=90;        //pusulanın testi sırasında kullanılabilecek test derece değişkeni
+
+
+float lat1;                 //kendi konum
+float lon1;                 //kendi konum
+
+float lat2;                 //hedef konum
+float lon2;                 //hedef konum
+
+HMC5883L compass;           
+
+int minX = 0;
+int maxX = 0;
+int minY = 0;
+int maxY = 0;
+int offX = 0;
+int offY = 0;
+
+int e;                      //basit pid
+
+const int SolMotorIleri = 30; // SÜRÜCÜ GİRİŞ 1
+const int SolMotorGeri = 32;  // SÜRÜCÜ GİRİŞ 2
+const int SagMotorIleri = 34; // SÜRÜCÜ GİRİŞ 3
+const int SagMotorGeri = 36;  // SÜRÜCÜ GİRİŞ 4
+
+const int  e1 =  13;           //sürücü pwm girişleri 1 ve 2 nolu pinleri kontrol eder(0.255)
+const int  e2 =  12;           //sürücü pwm girişleri 3 ve 4 nolu pinleri kontrol eder(0.255)
+
+float cikis;                   //kalibrasyondan çıkış için sayaç değişkeni
+
+int sagMotorHiz = 120;
+int solMotorHiz = 120;
+
+#define radyana 0.01745329251994329
+#define dereceye 57.295779513082320876f
+#define pi 3.14159265358979323846
+#define buzzer 2
+#define trig_pin 10 
+#define echo_pin 9 
+
+#define maxMesafe 200
+
+int distance;             //sensörün okuduğunu mesafe değişkeni
+
+NewPing sonar(trig_pin, echo_pin, maxMesafe); //sensor fonksiyonu
+Servo servo_motor;        //servo motorun adı
+int sayac=0;
+
+void setup(){
+Serial.begin(115200);     //Seri haberleşme baudrate(9600) olarak değiştirmeyiniz.
+  pinMode(e1,OUTPUT);
+  pinMode(e2,OUTPUT);
+  pinMode(SagMotorIleri, OUTPUT);
+  pinMode(SolMotorIleri, OUTPUT);
+  pinMode(SolMotorGeri, OUTPUT);
+  pinMode(SagMotorGeri, OUTPUT);
+//-----------------------------------SD CARD TEST---------
+  if (SD.begin())
+  {
+    Serial.println("SD KART KULLANIMA HAZIR");
+  } else
+  {
+    Serial.println("SD KART BULUNAMADI KOD KONTROL ET");
+    return;
+  }
+  
+  myFile = SD.open("testRota.txt", FILE_WRITE);
+  if (myFile) 
+  {
+    Serial.println("Dosyaya yazi yaziliyor");
+    myFile.println("konum falan..");
+    myFile.close(); // dosya kapat
+    Serial.println("yazildi");
+  }
+                                //eğer açılmazsa aşağıdaki yazacaktır:
+  else {
+    Serial.println("error opening test.txt");
+  }
+                               // dosya okuma işlemi:
+  myFile = SD.open("testRota.txt");
+  if (myFile) {
+    Serial.println("Okunuyor:");
+    while (myFile.available()) {
+      Serial.write(myFile.read());
+   }
+    myFile.close();           //dosya kapatma fonksiyonu
+  }
+  else {
+    Serial.println("error opening test.txt");
+  }
+  //--------------------DÖN-----------------------------------------------
+   analogWrite(e1,  100);
+  analogWrite(e2,  100);
+
+  digitalWrite(SolMotorIleri, HIGH);
+  digitalWrite(SagMotorGeri, HIGH);
+  
+  digitalWrite(SolMotorGeri, LOW);
+  digitalWrite(SagMotorIleri, LOW);
+  //----------------------------------------PUSULA BASLIYOR----------------
+while (!compass.begin())
+  {
+    delay(500);
+  }
+
+  // Set measurement range
+  compass.setRange(HMC5883L_RANGE_1_3GA);
+
+  // Set measurement mode
+  compass.setMeasurementMode(HMC5883L_CONTINOUS);
+
+  // Set data rate
+  compass.setDataRate(HMC5883L_DATARATE_30HZ);
+
+  // Set number of samples averaged
+  compass.setSamples(HMC5883L_SAMPLES_8);
+  do{
+  Vector mag = compass.readRaw();
+
+  // Determine Min / Max values
+  if (mag.XAxis < minX) minX = mag.XAxis;
+  if (mag.XAxis > maxX) maxX = mag.XAxis;
+  if (mag.YAxis < minY) minY = mag.YAxis;
+  if (mag.YAxis > maxY) maxY = mag.YAxis;
+
+  // Calculate offsets
+  offX = (maxX + minX)/2;
+  offY = (maxY + minY)/2;
+
+  
+  Serial.print(offX);
+  Serial.print(":");
+  Serial.print(offY);
+  Serial.print("\n");
+  sayac=sayac+1;
+  Serial.println(sayac);
+
+
+  }while(sayac<=1000);
+  //--------------------------------------
+  servo_motor.attach(11); 
+  //--------------------------------------
+  servo_motor.write(115);
+  delay(2000);
+  distance = SensorOku();
+  delay(100);
+  //-------------------------------------
+  dur();
+
+  Serial.print(offX);
+  Serial.print(":");
+  Serial.print(offY);
+  Serial.print("\n");
+  
+}
+
+void loop(){
+  
+ /* 
+  Serial.print(offX);
+  Serial.print(":");
+  Serial.print(offY);
+  Serial.print("\n");
+  */
+  void radar();
+  Serial.print("Hedef test derece====");
+  Serial.println(testderece);
+//----------------------------PUSULA------------------
+  Vector norm = compass.readNormalize();
+compass.setOffset(offX, offY);
+  // açı hesabı:
+  float heading = atan2(norm.YAxis, norm.XAxis);
+  void radar();
+
+  // Set declination angle on your location and fix heading
+  // You can find your declination on: http://magnetic-declination.com/
+  // (+) Positive or (-) for negative
+  // For Bytom / Poland declination angle is 4'26E (positive)
+  // Formula: (deg + (min / 60.0)) / (180 / M_PI);
+  float declinationAngle = (5.0 + (36.0 / 60.0)) / (180 / M_PI);
+  heading += declinationAngle;
+
+  // Correct for heading < 0deg and heading > 360deg
+  if (heading < 0)
+  {
+    heading += 2 * PI;
+  }
+
+  if (heading > 2 * PI)
+  {
+    heading -= 2 * PI;
+  }
+
+  // dereceye dönüştürme:
+  float pusulaDerece = heading * 180/M_PI; 
+
+  // çıkış
+  Serial.print(" Heading = ");
+  Serial.print(heading);
+  Serial.print(" Pusula = ");
+  Serial.print(pusulaDerece);
+  Serial.println();
+
+  delay(100);
+  void radar();
+
+  //------------------DERECE HESABI---------------------
+  /*
+      float a=radyana*lat1;
+      float b=lat2*radyana;
+      float c=lat1*radyana;
+      float d=radyana*lat2;
+
+      float dlon= (lon2-lon1)*radyana;
+      float y =sin(dlon)*cos(lat2*radyana);
+      float x =cos(a)*sin(b)-sin(c)*cos(d)*cos(dlon);
+      float  brng =dereceye*atan2(y,x);
+      float  bir=brng+360;
+      float  hedefDerece=fmod(bir,360.00);
+      Serial.print("        Hedef Derece: ");
+      Serial.println(hedefDerece);
+      
+      altDeger=hedefDerece-10.00;
+      ustDeger=hedefDerece+10.00;
+      void radar();
+      */
+
+      //--------------deneme derece////////////
+      altDeger=testderece-10.00;
+      ustDeger=testderece+10.00;
+      //----------------------
+      Serial.print("altDeger:   ");
+      Serial.println(altDeger);
+      Serial.print(" ");
+      Serial.print("ustDeger:   ");
+      Serial.println(ustDeger);
+
+void radar();
+//-------------------------------------------------------
+if(pusulaDerece<=altDeger)
+{
+ Serial.println("SAGA DONUYOR");
+  digitalWrite(SolMotorIleri, HIGH);
+    digitalWrite(SagMotorIleri, HIGH);
+    digitalWrite(SolMotorGeri, LOW);
+    digitalWrite(SagMotorGeri, LOW); 
+
+ for(int e;e<150;e++)
+   {
+    Serial.println(e);
+    analogWrite(e1,  100);
+    analogWrite(e2,  e);
+    delay(10);
+  }
+    e=100;
+}
+//-----------------------------------------------------------
+void radar();
+if(pusulaDerece>=ustDeger)
+{
+   Serial.println("SOLA DONUYOR");
+   digitalWrite(SolMotorIleri, HIGH);
+    digitalWrite(SagMotorIleri, HIGH);
+    digitalWrite(SolMotorGeri, LOW);
+    digitalWrite(SagMotorGeri, LOW); 
+
+   for(int e;e<150;e++)
+   {
+    analogWrite(e1,  e);
+    analogWrite(e2,  100);
+    delay(10);
+  }
+     
+    e=100;
+}
+//-----------------------------------------------------------
+void radar();
+
+if(pusulaDerece>=altDeger& pusulaDerece<=ustDeger)
+{
+   ileri();
+
+    Serial.println("ARAC ILERI GIDIYOR");
+    delay(150);
+}
+
+}//loop sonu
+//**************************************************************************
+  int sensor()
+  {
+    Serial.println("*****SENSOR AKTIF*****");
+    int distanceRight = 0;
+  
+  int distanceLeft = 0;
+  int distanceFront= 0;
+  delay(50);
+
+  if (distance <= 20){
+    dur();
+    delay(300);
+    geri();
+    delay(400);
+    dur();
+    delay(300);
+    distanceRight = sagaBak();
+    delay(700);
+    distanceLeft = solaBak();
+    delay(700);/*
+    distanceFront= oneBak();
+    delay(700);*/
+
+    if (distance >= distanceLeft)
+    {
+         analogWrite(e1,  165);
+         analogWrite(e2,  165);
+
+         digitalWrite(SolMotorIleri, HIGH);
+         digitalWrite(SagMotorGeri, HIGH);
+  
+         digitalWrite(SolMotorGeri, LOW);
+         digitalWrite(SagMotorIleri, LOW);
+         delay(1000);
+
+      dur();
+     
+      delay(400);
+    }
+
+    else
+    {
+       analogWrite(e1,  165);
+       analogWrite(e2,  165);
+
+       digitalWrite(SolMotorGeri, HIGH);
+       digitalWrite(SagMotorIleri, HIGH);
+  
+       digitalWrite(SolMotorIleri, LOW);
+       digitalWrite(SagMotorGeri, LOW);
+       delay(1000);
+       dur();
+    }
+  }
+  
+ 
+    distance = SensorOku();
+  }
+
+int oneBak()
+{
+  Serial.println("servo on");
+  servo_motor.write(115);
+ int distance = SensorOku();
+  delay(100);
+  servo_motor.write(115);
+  return distance;
+}
+
+int sagaBak(){  
+  Serial.println("servo sag");
+  servo_motor.write(50);
+  delay(500);
+  int distance = SensorOku();
+  delay(100);
+  servo_motor.write(115);
+  return distance;
+}
+
+int solaBak(){
+  Serial.println("servo sol");
+  servo_motor.write(170);
+  delay(500);
+  int distance = SensorOku();
+  delay(100);
+  servo_motor.write(115);
+  return distance;
+  delay(100);
+}
+
+int SensorOku(){
+  delay(70);
+  int cm = sonar.ping_cm();
+  if (cm==0){
+    cm=250;
+    Serial.println(cm);
+  }
+   Serial.println(cm);
+  return cm;
+}
+
+int radar()
+{
+
+  SensorOku();
+  distance=SensorOku();
+  Serial.println(distance);
+  if(distance <=20)
+  {
+    int sensor();
+  }
+}
+
+
+int geri(){
+  Serial.println("            GERI FONKSIYONDA");
+
+  analogWrite(e1,  75);
+  analogWrite(e2,  75);
+
+  digitalWrite(SolMotorGeri, HIGH);
+  digitalWrite(SagMotorGeri, HIGH);
+  
+  digitalWrite(SolMotorIleri, LOW);
+  digitalWrite(SagMotorIleri, LOW);
+  delay(150);
+}
+
+int dur()
+{
+    Serial.println("          DUR FONKSIYONDA");
+  analogWrite(e1,0);
+  analogWrite(e2,0);
+
+
+  digitalWrite(SolMotorGeri, LOW);
+  digitalWrite(SagMotorGeri, LOW);
+  
+  digitalWrite(SolMotorIleri, LOW);
+  digitalWrite(SagMotorIleri, LOW);
+  delay(150);
+}
+
+//---------------------------------------------
+
+int ileri()
+{
+  Serial.println("          ILERI FONKSIYONDA");
+  analogWrite(e1,100);
+  analogWrite(e2,100);
+
+
+  digitalWrite(SolMotorGeri, LOW);
+  digitalWrite(SagMotorGeri, LOW);
+  
+  digitalWrite(SolMotorIleri, HIGH);
+  digitalWrite(SagMotorIleri, HIGH);
+    delay(150);
+}
